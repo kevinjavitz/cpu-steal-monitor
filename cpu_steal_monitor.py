@@ -1107,6 +1107,30 @@ def web_server():
     return ''
 
 
+def htaccess_text():
+    no_cache = ('    Header unset Cache-Control\n'
+                '    Header always unset Cache-Control\n'
+                '    Header set Cache-Control "private, no-store, no-cache, must-revalidate, max-age=0"\n'
+                '    Header always set Cache-Control "private, no-store, no-cache, must-revalidate, max-age=0"\n')
+    return (f'# {MARK}: password protection for the dashboard\n'
+            f'AuthType Basic\nAuthName "CPU steal monitor"\nAuthUserFile {HTPASSWD}\nRequire valid-user\n'
+            '# Keeps a CMS in the parent folder (e.g. WordPress) from swallowing the login prompt\n'
+            'ErrorDocument 401 default\n'
+            'Options -Indexes\n\n'
+            '# Nothing here may be cached by a CDN or browser: a cached copy would skip the password.\n'
+            '# The <FilesMatch> repeats it because a parent .htaccess (WP Rocket, for one) can append\n'
+            '# "public" inside its own <FilesMatch>, which Apache applies after plain directives here.\n'
+            '<IfModule mod_expires.c>\n  ExpiresActive Off\n</IfModule>\n'
+            '<IfModule mod_headers.c>\n'
+            f'{no_cache}'
+            '    Header unset Expires\n'
+            '    Header always unset Expires\n'
+            '  <FilesMatch ".">\n'
+            f'{no_cache}'
+            '  </FilesMatch>\n'
+            '</IfModule>\n')
+
+
 def unit_files(conf, py):
     app = os.path.join(APP_DIR, 'cpu_steal_monitor.py')
     run = f'{py} -I {app}'
@@ -1249,26 +1273,25 @@ def cmd_setup(args):
         protect = not args.no_web_password and (args.web_password or args.web_password_file
                                                 or ask_yes('Protect the dashboard with a password?', True, yes))
         if protect:
-            user = args.web_user or ask('Dashboard user name', 'admin', yes)
-            if args.web_password_file:
-                with open(args.web_password_file) as f:
-                    password = f.read().strip()
+            new_login = args.web_user or args.web_password or args.web_password_file
+            if os.path.exists(HTPASSWD) and not new_login and ask_yes('Keep the current dashboard login?', True, yes):
+                pass
             else:
-                password = args.web_password or (getpass.getpass('Dashboard password (empty = make one up): ')
-                                                 if not yes and sys.stdin.isatty() else '')
-            if not password:
-                password = secrets.token_urlsafe(12)
-                password_note = f'Dashboard login: {user} / {password}  (shown once; change it with setup)'
-            write_atomic(HTPASSWD, f'{user}:{apr1(password)}\n', mode=0o644)
+                user = args.web_user or ask('Dashboard user name', 'admin', yes)
+                if args.web_password_file:
+                    with open(args.web_password_file) as f:
+                        password = f.read().strip()
+                else:
+                    password = args.web_password or (getpass.getpass('Dashboard password (empty = make one up): ')
+                                                     if not yes and sys.stdin.isatty() else '')
+                if not password:
+                    password = secrets.token_urlsafe(12)
+                    password_note = f'Dashboard login: {user} / {password}  (shown once; change it with setup)'
+                write_atomic(HTPASSWD, f'{user}:{apr1(password)}\n', mode=0o644)
             server = web_server()
             if server != 'nginx':
-                write_atomic(f"{conf['WEB_DIR']}/.htaccess",
-                             f'# {MARK}: password protection for the dashboard\n'
-                             f'AuthType Basic\nAuthName "CPU steal monitor"\nAuthUserFile {HTPASSWD}\nRequire valid-user\n'
-                             '# Keeps a CMS in the parent folder (e.g. WordPress) from swallowing the login prompt\n'
-                             'ErrorDocument 401 default\n'
-                             '<IfModule mod_headers.c>\n  Header set Cache-Control "private, no-store"\n</IfModule>\n',
-                             owner=web_owner(conf['WEB_DIR']))
+                web = conf['WEB_DIR']
+                as_owner(web, lambda: write_atomic(f'{web}/.htaccess', htaccess_text()))
             if server == 'nginx':
                 print('\nnginx: add this inside the server block for the dashboard, then reload nginx:\n'
                       f'  location /{os.path.basename(conf["WEB_DIR"])}/ {{\n'

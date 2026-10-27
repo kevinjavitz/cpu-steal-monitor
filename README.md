@@ -65,7 +65,7 @@ sudo ./install.sh --yes \
 
 Other flags: `--no-email`, `--no-web`, `--no-web-password`, `--php-pool NAME`, `--host-label NAME`, `--sendmail PATH`,
 `--smtp-host HOST --smtp-port 587 --smtp-security starttls|ssl|none --smtp-user U --smtp-password P`.
-Run `cpu-steal-monitor setup` again at any time to change answers.
+Run `cpu-steal-monitor setup` again at any time to change answers; it keeps the dashboard login unless you give a new one.
 
 ## Reading the numbers
 
