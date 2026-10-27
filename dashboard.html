@@ -1,0 +1,471 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>CPU steal monitor</title>
+<style>
+/* One column: summary first (verdict, tiles), then the chart, episodes and the web-host ticket. */
+:root {
+  --bg: #F6F8FB; --surface: #FFFFFF; --head: #111111; --ink: #242424; --sub: #5B5F66; --line: #E4E9F0;
+  --navy: #10243D; --bar: #2B4A72; --grid: #E4E9F0; --sar: #A9B6C7; --sel: rgba(248,81,18,.14);
+  --flame: #F85112; --ember: #C73E0C; --amber: #D99A1E;
+  --ok: #17804B; --ok-tint: #E8F5EE; --warn: #965E00; --warn-tint: #FDF3E0; --bad: #B42318; --bad-tint: #FBEAEA;
+  --tip-bg: #10243D; --tip-fg: #F1F5F9; --btn-on: #10243D; --btn-on-fg: #FFFFFF;
+  --font: "Montserrat", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root {
+  --bg: #0B1220; --surface: #10243D; --head: #F1F5F9; --ink: #CBD5E1; --sub: #94A3B8; --line: #24405F;
+  --navy: #CBD5E1; --bar: #8FB3E0; --grid: #24405F; --sar: #4D6685; --sel: rgba(255,138,61,.18);
+  --flame: #FF8A3D; --ember: #FF8A3D; --amber: #F2B656;
+  --ok: #5CC98D; --ok-tint: #0F2E20; --warn: #F2B656; --warn-tint: #3A2A0A; --bad: #F08A80; --bad-tint: #3A1414;
+  --tip-bg: #F1F5F9; --tip-fg: #0B1220; --btn-on: #F1F5F9; --btn-on-fg: #0B1220; color-scheme: dark; } }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.55 var(--font); }
+.wrap { max-width: 1120px; margin: 0 auto; padding: 28px 16px 48px; display: grid; gap: 20px; }
+h1, h2 { color: var(--head); margin: 0; line-height: 1.25; }
+h1 { font-size: 26px; font-weight: 800; }
+h2 { font-size: 18px; font-weight: 700; }
+.tag { font-size: 12px; font-weight: 700; color: var(--ember); text-transform: uppercase; letter-spacing: .05em; }
+.meta { color: var(--sub); font-size: 13px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 20px; display: grid; gap: 16px; min-width: 0; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg button { font: 600 13px/1 var(--font); color: var(--ink); background: transparent; border: 0; padding: 10px 13px; cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: var(--btn-on); color: var(--btn-on-fg); }
+.btn { font: 600 13px/1 var(--font); color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; cursor: pointer; }
+.btn:disabled { opacity: .35; cursor: default; }
+.btn.primary { background: var(--flame); border-color: var(--flame); color: #fff; }
+button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--flame); outline-offset: 2px; }
+.dates { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 13px; color: var(--sub); }
+.dates input { font: 500 13px var(--font); color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 7px 8px; }
+.range { font-weight: 700; color: var(--head); font-variant-numeric: tabular-nums; }
+.pill { display: inline-block; font-size: 13px; font-weight: 700; border-radius: 999px; padding: 4px 12px; }
+.pill.ok { color: var(--ok); background: var(--ok-tint); } .pill.warn { color: var(--warn); background: var(--warn-tint); } .pill.bad { color: var(--bad); background: var(--bad-tint); }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
+.tile { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; display: grid; gap: 1px; align-content: start; }
+.tile .k { font-size: 12.5px; font-weight: 600; color: var(--sub); }
+.tile .v { font-size: 24px; font-weight: 800; color: var(--head); font-variant-numeric: tabular-nums; line-height: 1.25; }
+.tile .s { font-size: 12px; color: var(--sub); }
+.tile.warn .v { color: var(--warn); } .tile.bad .v { color: var(--bad); } .tile.ok .v { color: var(--ok); }
+.chartbox { position: relative; min-width: 0; user-select: none; }
+.chartbox svg { display: block; width: 100%; height: auto; touch-action: pan-y; cursor: crosshair; }
+.chartbox text { font-family: var(--font); }
+.tip { position: absolute; pointer-events: none; background: var(--tip-bg); color: var(--tip-fg); font-size: 12px; line-height: 1.45;
+  border-radius: 8px; padding: 7px 10px; white-space: nowrap; transform: translateX(-50%); z-index: 2; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12.5px; color: var(--sub); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+.note { font-size: 12.5px; color: var(--sub); margin: 0; }
+.loading { font-size: 13px; color: var(--sub); }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+th { text-align: left; font-size: 12px; color: var(--sub); font-weight: 700; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+td { padding: 7px 8px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+td.r, th.r { text-align: right; }
+tr.click { cursor: pointer; } tr.click:hover td { background: var(--bg); }
+.tablewrap { overflow-x: auto; }
+textarea { width: 100%; min-height: 220px; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--ink);
+  background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; resize: vertical; }
+.row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.status { font-size: 13px; color: var(--ok); }
+footer { font-size: 12px; color: var(--sub); }
+footer a { color: var(--sub); }
+@media (max-width: 560px) { .card { padding: 16px 14px; } .tile .v { font-size: 21px; } h1 { font-size: 22px; } }
+@media (prefers-reduced-motion: no-preference) { .tile .v { transition: color .2s; } }
+</style>
+</head>
+<body>
+<main class="wrap">
+  <header style="display:grid;gap:4px">
+    <div class="tag">CPU steal</div>
+    <h1 id="host">Loading…</h1>
+    <div class="meta" id="meta"></div>
+  </header>
+
+  <section class="card" aria-label="Chart">
+    <div class="toolbar">
+      <div class="seg" role="group" aria-label="Range">
+        <button type="button" data-days="1" aria-pressed="false">Day</button>
+        <button type="button" data-days="7" aria-pressed="false">Week</button>
+        <button type="button" data-days="30" aria-pressed="false">Month</button>
+        <button type="button" data-days="90" aria-pressed="false">3 months</button>
+        <button type="button" data-days="365" aria-pressed="false">Year</button>
+      </div>
+      <button type="button" class="btn" id="prev" aria-label="Earlier">&#8249; Earlier</button>
+      <button type="button" class="btn" id="next" aria-label="Later">Later &#8250;</button>
+      <form class="dates" id="dates">
+        <label for="from">From</label><input type="date" id="from">
+        <label for="to">to</label><input type="date" id="to">
+        <button type="submit" class="btn">Show</button>
+      </form>
+    </div>
+    <div class="row"><span class="range" id="range"></span><span id="verdict"></span><span class="loading" id="loading" hidden>Loading…</span></div>
+    <div class="tiles" id="tiles"></div>
+    <div class="chartbox" id="chartbox">
+      <svg id="chart" role="img" aria-label="CPU steal over time"></svg>
+      <div class="tip" id="tip" hidden></div>
+    </div>
+    <div class="legend" id="legend"></div>
+    <p class="note" id="note"></p>
+  </section>
+
+  <section class="card" aria-labelledby="ep-h">
+    <h2 id="ep-h">Episodes in this range</h2>
+    <p class="note" id="ep-note"></p>
+    <div class="tablewrap"><table id="episodes"></table></div>
+  </section>
+
+  <section class="card" aria-labelledby="tk-h">
+    <h2 id="tk-h">Ticket for your web host</h2>
+    <p class="note">A support-ticket text with the numbers for the range shown above. Pick the range with the worst episodes, copy it, and paste it into a ticket with your hosting provider.</p>
+    <div class="row"><button type="button" class="btn primary" id="copy">Copy ticket text</button><span class="status" id="copied" aria-live="polite"></span></div>
+    <label for="ticket" class="note">Ticket text</label>
+    <textarea id="ticket" readonly></textarea>
+  </section>
+
+  <footer id="foot"></footer>
+</main>
+<script>
+(function () {
+  'use strict';
+  var DAY = 86400, HOUR = 3600;
+  var MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'], WD = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  var meta = null, hours = null, episodes = null, sar = null, dayCache = {};
+  var state = { from: 0, to: 0 };
+  var bins = [], geo = null, drag = null;
+  var $ = function (id) { return document.getElementById(id); };
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+  function D(t) { return new Date(t * 1000); }
+  function hm(t) { var d = D(t); return pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes()); }
+  function md(t) { var d = D(t); return MON[d.getUTCMonth()] + ' ' + d.getUTCDate(); }
+  function wmd(t) { var d = D(t); return WD[d.getUTCDay()] + ' ' + MON[d.getUTCMonth()] + ' ' + d.getUTCDate(); }
+  function iso(t) { var d = D(t); return d.getUTCFullYear() + '-' + pad(d.getUTCMonth() + 1) + '-' + pad(d.getUTCDate()); }
+  function dayStart(t) { return Math.floor(t / DAY) * DAY; }
+  function local(t) {
+    var opt = { hour: '2-digit', minute: '2-digit', hour12: false };
+    try { if (meta && meta.extraTz) { opt.timeZone = meta.extraTz; return D(t).toLocaleTimeString([], opt) + ' ' + (meta.extraTzLabel || meta.extraTz); } } catch (e) {}
+    return D(t).toLocaleTimeString([], opt) + ' your time';
+  }
+  function fmtMin(m) { m = Math.round(m); if (m < 60) return m + ' min'; var h = Math.floor(m / 60), r = m % 60; return h + ' h' + (r ? ' ' + r + ' min' : ''); }
+  function css(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+  function getJSON(url) { return fetch(url, { cache: 'no-store', credentials: 'same-origin' }).then(function (r) { if (!r.ok) throw new Error(url + ' ' + r.status); return r.json(); }); }
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+
+  function now() { return Math.floor(Date.now() / 1000); }
+  function firstData() {
+    var f = Infinity;
+    if (meta && meta.days.length) f = Date.parse(meta.days[0][0] + 'T00:00:00Z') / 1000;
+    if (sar && sar.length) f = Math.min(f, sar[0][0]);
+    return isFinite(f) ? dayStart(f) : dayStart(now());
+  }
+  function ownFrom() { return meta && meta.days.length ? Date.parse(meta.days[0][0] + 'T00:00:00Z') / 1000 : Infinity; }
+
+  function setPreset(days, endT) {
+    var end = dayStart((endT || now()) - 1) + DAY;
+    state.from = end - days * DAY; state.to = end;
+    go();
+  }
+  function go() {
+    var p = '#from=' + state.from + '&to=' + state.to;
+    if (location.hash !== p) history.replaceState(null, '', p);
+    render();
+  }
+
+  function loadDays(from, to) {
+    var need = [];
+    for (var d = dayStart(from); d < to; d += DAY) { var k = iso(d); if (!(k in dayCache)) need.push(k); }
+    return Promise.all(need.map(function (k) {
+      return getJSON('data/day/' + k + '.json').then(function (j) { dayCache[k] = j; }, function () { dayCache[k] = null; });
+    }));
+  }
+
+  // Points for the range, each {t, len, avg, worst, peak, busy, slow, full, over, n, src}
+  function collect(from, to) {
+    var span = to - from, pts = [], ev = { slow: [], full: [] };
+    if (span <= 8 * DAY) {
+      for (var d = dayStart(from); d < to; d += DAY) {
+        var j = dayCache[iso(d)]; if (!j) continue;
+        j.m.forEach(function (r) { var t = j.start + r[0] * 60; if (t >= from && t < to) pts.push({ t: t, len: 60, avg: r[1], worst: r[1], peak: r[2], busy: r[3], n: 1, over: r[1] >= meta.threshold ? 1 : 0, src: 'own' }); });
+        j.slow.forEach(function (o) { var t = j.start + o; if (t >= from && t < to) ev.slow.push(t); });
+        j.full.forEach(function (o) { var t = j.start + o; if (t >= from && t < to) ev.full.push(t); });
+      }
+    } else {
+      hours.forEach(function (h) {
+        if (h[0] < from || h[0] >= to) return;
+        if (h[1]) pts.push({ t: h[0], len: HOUR, avg: h[2], worst: h[3], peak: h[4], busy: h[5], n: h[1], over: h[8] || 0, src: 'own' });
+        for (var i = 0; i < h[6]; i++) ev.slow.push(h[0] + 1);
+        for (var k = 0; k < h[7]; k++) ev.full.push(h[0] + 1);
+      });
+    }
+    // sar fills time with no own samples (before install, or while the sampler was down)
+    var covered = {};
+    pts.forEach(function (p) { covered[Math.floor(p.t / 600)] = 1; if (p.len === HOUR) for (var i = 0; i < 6; i++) covered[Math.floor(p.t / 600) + i] = 1; });
+    (sar || []).forEach(function (s) {
+      if (s[0] < from || s[0] >= to || covered[Math.floor(s[0] / 600)]) return;
+      pts.push({ t: s[0], len: 600, avg: s[1], worst: s[1], peak: null, busy: s[2], n: 10, over: 0, src: 'sar' });
+    });
+    pts.sort(function (a, b) { return a.t - b.t; });
+    return { pts: pts, ev: ev };
+  }
+
+  function stats(c) {
+    var own = c.pts.filter(function (p) { return p.src === 'own'; });
+    var use = own.length ? own : c.pts, w = 0, s = 0, b = 0, worst = null, over = 0, peak = null;
+    use.forEach(function (p) { w += p.n; s += p.avg * p.n; b += (p.busy || 0) * p.n; over += p.over; if (!worst || p.worst > worst.worst) worst = p; if (p.peak != null && (peak == null || p.peak > peak)) peak = p.peak; });
+    return { src: own.length ? 'own' : (c.pts.length ? 'sar' : 'none'), avg: w ? s / w : 0, busy: w ? b / w : 0, worst: worst, over: over, peak: peak, mixed: own.length && own.length < c.pts.length };
+  }
+
+  // Same rules as level_for() in cpu_steal_monitor.py
+  function verdict(st, eps) {
+    var longest = 0; eps.forEach(function (e) { longest = Math.max(longest, e.minutes); });
+    var w = st.worst ? st.worst.worst : 0;
+    if (st.avg >= 10 || longest >= 5) return ['bad', 'Heavy: the host was short of CPU'];
+    if (st.avg >= 3 || w >= meta.threshold) return ['warn', 'Watch: some steal spikes'];
+    if (st.src === 'none') return ['', ''];
+    return ['ok', 'Low: the host gave this server its full CPU'];
+  }
+
+  function render() {
+    var from = state.from, to = state.to, span = to - from;
+    document.querySelectorAll('.seg button').forEach(function (b) {
+      var d = +b.dataset.days; b.setAttribute('aria-pressed', span === d * DAY && to === dayStart(now() - 1) + DAY ? 'true' : 'false');
+    });
+    $('prev').disabled = from <= firstData();
+    $('next').disabled = to >= dayStart(now()) + DAY;
+    $('from').value = iso(from); $('to').value = iso(to - 1);
+    $('range').textContent = span <= DAY && from % DAY === 0 ? wmd(from) + ' (UTC)' :
+      (span < DAY ? md(from) + ' ' + hm(from) + ' – ' + hm(to) + ' UTC' : md(from) + ' – ' + md(to - 1) + ', ' + Math.round(span / DAY) + ' days (UTC)');
+    var ready = span <= 8 * DAY ? loadDays(from, to) : Promise.resolve();
+    $('loading').hidden = false;
+    ready.then(function () { $('loading').hidden = true; draw(from, to); });
+  }
+
+  function draw(from, to) {
+    var c = collect(from, to), st = stats(c), span = to - from;
+    var eps = (episodes || []).filter(function (e) { return e.start >= from && e.start < to; });
+    var v = verdict(st, eps);
+    $('verdict').innerHTML = v[0] ? '<span class="pill ' + v[0] + '">' + esc(v[1]) + '</span>' : '';
+    var sarNote = st.src === 'sar' ? ' (sar 10-min)' : '';
+    var tiles = [
+      { k: 'Average steal', v: st.src === 'none' ? '–' : st.avg.toFixed(1) + '%', s: st.src === 'none' ? 'no data' : 'about ' + (st.avg / 100 * meta.ncpu).toFixed(2) + ' of ' + meta.ncpu + ' vCPUs' + sarNote,
+        c: st.src === 'none' ? '' : st.avg >= 10 ? 'bad' : st.avg >= 3 ? 'warn' : 'ok' },
+      { k: st.src === 'sar' ? 'Worst 10 minutes' : 'Worst minute', v: st.worst ? st.worst.worst.toFixed(0) + '%' : '–', s: st.worst ? md(st.worst.t) + ', ' + hm(st.worst.t) + ' UTC' : 'no data',
+        c: st.worst ? (st.worst.worst >= meta.threshold ? 'bad' : st.worst.worst >= 10 ? 'warn' : 'ok') : '' },
+      { k: 'Minutes at ' + meta.threshold + '% or more', v: st.src === 'own' ? String(st.over) : '–', s: st.src === 'own' ? eps.length + ' episode' + (eps.length === 1 ? '' : 's') : 'needs 5-second data', c: st.over ? 'warn' : '' },
+      { k: 'Own CPU use', v: st.src === 'none' ? '–' : st.busy.toFixed(0) + '%', s: 'what this server itself used', c: '' }
+    ];
+    if (meta.php) {
+      tiles.push({ k: 'Slow PHP requests', v: String(c.ev.slow.length), s: (meta.site ? meta.site + ', ' : '') + 'over the slow-log limit', c: '' });
+      tiles.push({ k: 'PHP pool full', v: String(c.ev.full.length), s: 'times all PHP workers were busy', c: c.ev.full.length ? 'warn' : '' });
+    }
+    $('tiles').innerHTML = tiles.map(function (t) { return '<div class="tile ' + t.c + '"><span class="k">' + esc(t.k) + '</span><span class="v">' + esc(t.v) + '</span><span class="s">' + esc(t.s) + '</span></div>'; }).join('');
+    chart(c, from, to);
+    var parts = [];
+    parts.push(span <= 8 * DAY ? 'Each bar is the worst minute in its slot.' : 'Each bar is the worst minute in its slot (from hourly summaries).');
+    if (c.pts.some(function (p) { return p.src === 'sar'; })) parts.push('Grey bars are sar 10-minute averages from before the monitor ran (or while it was stopped); they smooth out short spikes.');
+    parts.push('Drag across the chart to zoom in. Times are UTC; hover or tap a bar for ' + (meta.extraTz ? (meta.extraTzLabel || meta.extraTz) : 'your local') + ' time.');
+    $('note').textContent = parts.join(' ');
+    episodesTable(eps);
+    $('ticket').value = ticket(from, to, st, eps);
+  }
+
+  function chart(c, from, to) {
+    var box = $('chartbox'), svg = $('chart');
+    var W = Math.max(300, Math.round(box.clientWidth || 900)), narrow = W < 560;
+    var L = narrow ? 34 : 42, R = 6, T = 8, PH = narrow ? 170 : 230, GAP = 28, LANE = meta.php ? 16 : 0;
+    var H = T + PH + GAP + LANE * 2 + 6, PW = W - L - R, span = to - from;
+    var target = Math.floor(PW / (span <= DAY ? 4 : 3));
+    var base = span <= 8 * DAY ? 60 : HOUR;
+    var nb = Math.max(1, Math.min(target, Math.ceil(span / base)));
+    var bw = span / nb;
+    bins = [];
+    for (var i = 0; i < nb; i++) bins.push({ a: from + i * bw, b: from + (i + 1) * bw, worst: null, wt: 0, sum: 0, n: 0, peak: null, busy: 0, slow: 0, full: 0, sar: true });
+    c.pts.forEach(function (p) {
+      var k = Math.min(nb - 1, Math.floor((p.t - from) / bw)), x = bins[k];
+      if (p.src === 'own') { if (x.sar) { x.sar = false; x.worst = null; x.sum = 0; x.n = 0; x.busy = 0; } }
+      else if (!x.sar) return;
+      x.n += p.n; x.sum += p.avg * p.n; x.busy += (p.busy || 0) * p.n;
+      if (x.worst === null || p.worst > x.worst) { x.worst = p.worst; x.wt = p.t; }
+      if (p.peak != null && (x.peak === null || p.peak > x.peak)) x.peak = p.peak;
+    });
+    c.ev.slow.forEach(function (t) { bins[Math.min(nb - 1, Math.floor((t - from) / bw))].slow++; });
+    c.ev.full.forEach(function (t) { bins[Math.min(nb - 1, Math.floor((t - from) / bw))].full++; });
+    var vmax = 0; bins.forEach(function (x) { if (x.worst > vmax) vmax = x.worst; });
+    var ymax = Math.max(10, Math.ceil(vmax / 10) * 10), step = ymax <= 20 ? 5 : ymax <= 50 ? 10 : 20;
+    var y = function (v) { return T + PH - v / ymax * PH; }, xs = function (t) { return L + (t - from) / span * PW; };
+    geo = { L: L, PW: PW, T: T, PH: PH, W: W, H: H, from: from, span: span, nb: nb };
+    var col = { bar: css('--bar'), amber: css('--amber'), flame: css('--flame'), grid: css('--grid'), sub: css('--sub'), navy: css('--navy'), sar: css('--sar'), sel: css('--sel') };
+    var s = [];
+    for (var g = 0; g <= ymax; g += step) {
+      s.push('<line x1="' + L + '" x2="' + (W - R) + '" y1="' + y(g) + '" y2="' + y(g) + '" stroke="' + col.grid + '"/>');
+      s.push('<text x="' + (L - 6) + '" y="' + (y(g) + 4) + '" text-anchor="end" font-size="11" fill="' + col.sub + '">' + g + '%</text>');
+    }
+    var thr = meta.threshold;
+    if (thr <= ymax) s.push('<line x1="' + L + '" x2="' + (W - R) + '" y1="' + y(thr) + '" y2="' + y(thr) + '" stroke="' + col.flame + '" stroke-dasharray="4 4" stroke-opacity=".7"/>');
+    var bwpx = PW / nb, gap = bwpx > 4 ? 1 : 0;
+    bins.forEach(function (x, i) {
+      if (x.worst === null) return;
+      var colr = x.sar ? col.sar : x.worst >= thr ? col.flame : x.worst >= 10 ? col.amber : col.bar;
+      var top = y(x.worst), h = Math.max(1, T + PH - top);
+      s.push('<rect x="' + (L + i * bwpx).toFixed(2) + '" y="' + top.toFixed(2) + '" width="' + Math.max(.6, bwpx - gap).toFixed(2) + '" height="' + h.toFixed(2) + '" fill="' + colr + '"/>');
+    });
+    s.push('<line x1="' + L + '" x2="' + (W - R) + '" y1="' + (T + PH) + '" y2="' + (T + PH) + '" stroke="' + col.sub + '"/>');
+    // x ticks
+    var ticks = [], stepT, fmt;
+    if (span <= 2 * DAY) { stepT = span <= 6 * HOUR ? HOUR : span <= DAY ? (narrow ? 6 : 3) * HOUR : (narrow ? 12 : 6) * HOUR; fmt = function (t) { return t % DAY === 0 && span > DAY ? md(t) : hm(t); }; }
+    else if (span <= 10 * DAY) { stepT = DAY; fmt = function (t) { return narrow ? String(D(t).getUTCDate()) : WD[D(t).getUTCDay()] + ' ' + D(t).getUTCDate(); }; }
+    else { var dd = span / DAY; stepT = (dd <= 45 ? (narrow ? 7 : 5) : dd <= 120 ? (narrow ? 30 : 14) : (narrow ? 90 : 30)) * DAY; fmt = md; }
+    for (var t = Math.ceil(from / stepT) * stepT; t <= to; t += stepT) ticks.push(t);
+    ticks.forEach(function (t) {
+      var xx = xs(t); if (xx < L - .5 || xx > W - R + .5) return;
+      var anchor = xx < L + 22 ? 'start' : xx > W - R - 22 ? 'end' : 'middle';
+      s.push('<line x1="' + xx + '" x2="' + xx + '" y1="' + (T + PH) + '" y2="' + (T + PH + 4) + '" stroke="' + col.sub + '"/>');
+      s.push('<text x="' + xx + '" y="' + (T + PH + 17) + '" text-anchor="' + anchor + '" font-size="11" fill="' + col.sub + '">' + fmt(t) + '</text>');
+    });
+    if (meta.php) {
+      var l1 = T + PH + GAP + LANE / 2, l2 = l1 + LANE;
+      [['PHP', l1], ['Full', l2]].forEach(function (r) {
+        s.push('<text x="' + (L - 6) + '" y="' + (r[1] + 4) + '" text-anchor="end" font-size="10" fill="' + col.sub + '">' + r[0] + '</text>');
+        s.push('<line x1="' + L + '" x2="' + (W - R) + '" y1="' + r[1] + '" y2="' + r[1] + '" stroke="' + col.grid + '"/>');
+      });
+      bins.forEach(function (x, i) {
+        var cx = (L + (i + .5) * bwpx).toFixed(2);
+        if (x.slow) s.push('<circle cx="' + cx + '" cy="' + l1 + '" r="' + Math.min(6, 2 + Math.sqrt(x.slow)).toFixed(1) + '" fill="' + col.flame + '" fill-opacity=".85"/>');
+        if (x.full) s.push('<circle cx="' + cx + '" cy="' + l2 + '" r="' + Math.min(6, 2 + Math.sqrt(x.full)).toFixed(1) + '" fill="' + col.navy + '" fill-opacity=".8"/>');
+      });
+    }
+    s.push('<rect id="hl" x="0" y="' + T + '" width="0" height="' + PH + '" fill="' + col.navy + '" fill-opacity=".08"/>');
+    s.push('<rect id="selrect" x="0" y="' + T + '" width="0" height="' + PH + '" fill="' + col.sel + '"/>');
+    if (!c.pts.length) s.push('<text x="' + (L + PW / 2) + '" y="' + (T + PH / 2) + '" text-anchor="middle" font-size="13" fill="' + col.sub + '">No data for this range</text>');
+    svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+    svg.innerHTML = s.join('');
+    var lg = '<span><i class="sw" style="background:var(--bar)"></i>Under 10%</span><span><i class="sw" style="background:var(--amber)"></i>10% or more</span>' +
+      '<span><i class="sw" style="background:var(--flame)"></i>' + thr + '% or more</span>';
+    if (c.pts.some(function (p) { return p.src === 'sar'; })) lg += '<span><i class="sw" style="background:var(--sar)"></i>sar 10-minute average</span>';
+    if (meta.php) lg += '<span><i class="sw" style="background:var(--flame);border-radius:50%"></i>Slow PHP requests</span><span><i class="sw" style="background:var(--navy);border-radius:50%"></i>PHP pool full</span>';
+    $('legend').innerHTML = lg;
+  }
+
+  function xToT(clientX) {
+    var r = $('chart').getBoundingClientRect(), x = (clientX - r.left) * geo.W / r.width;
+    return { x: x, t: geo.from + Math.max(0, Math.min(1, (x - geo.L) / geo.PW)) * geo.span, inside: x >= geo.L && x <= geo.L + geo.PW, scale: geo.W / r.width };
+  }
+  function showTip(clientX) {
+    if (!geo) return;
+    var p = xToT(clientX); if (!p.inside) { hideTip(); return; }
+    var i = Math.min(geo.nb - 1, Math.floor((p.x - geo.L) / geo.PW * geo.nb)), b = bins[i], bwpx = geo.PW / geo.nb;
+    var hl = $('hl'); hl.setAttribute('x', geo.L + i * bwpx); hl.setAttribute('width', Math.max(1, bwpx));
+    var a = Math.round(b.a), z = Math.round(b.b);
+    var lines = [(z - a <= 120 ? md(a) + ', ' + hm(a) : md(a) + ' ' + hm(a) + ' – ' + (iso(a) === iso(z - 1) ? '' : md(z - 1) + ' ') + hm(z)) + ' UTC (' + local(a) + ')'];
+    if (b.worst === null) lines.push('No data');
+    else {
+      lines.push((b.sar ? 'sar 10-min ' : 'Worst minute ') + b.worst.toFixed(1) + '%' + (b.n > 1 ? ', average ' + (b.sum / b.n).toFixed(1) + '%' : ''));
+      if (b.peak !== null) lines.push('Highest 5-second sample ' + b.peak.toFixed(1) + '%');
+      lines.push('Own CPU use ' + (b.busy / b.n).toFixed(0) + '%');
+    }
+    if (meta.php && (b.slow || b.full)) lines.push('Slow PHP ' + b.slow + (b.full ? ', pool full ' + b.full : ''));
+    var tip = $('tip'); tip.innerHTML = lines.map(esc).join('<br>'); tip.hidden = false;
+    var r = $('chart').getBoundingClientRect(), px = (geo.L + (i + .5) * bwpx) / p.scale, tw = tip.offsetWidth / 2;
+    tip.style.left = Math.max(tw + 2, Math.min(r.width - tw - 2, px)) + 'px'; tip.style.top = '4px';
+  }
+  function hideTip() { $('tip').hidden = true; var hl = $('hl'); if (hl) hl.setAttribute('width', 0); }
+
+  function episodesTable(eps) {
+    var tb = $('episodes');
+    if (!eps.length) {
+      tb.innerHTML = ''; $('ep-note').textContent = state.to <= ownFrom() ? 'Episodes need 5-second data, which starts on ' + (isFinite(ownFrom()) ? md(ownFrom()) : 'the day the monitor was installed') + '.' :
+        'No minute averaged ' + meta.threshold + '% or more in this range.';
+      return;
+    }
+    var top = eps.slice().sort(function (a, b) { return b.worst - a.worst; }).slice(0, 50);
+    $('ep-note').textContent = 'Runs of minutes averaging ' + meta.threshold + '% or more. ' + (eps.length > 50 ? 'The 50 worst of ' + eps.length + '. ' : '') + 'Click one to zoom in.';
+    tb.innerHTML = '<tr><th>Started (UTC)</th><th class="r">Length</th><th class="r">Average</th><th class="r">Worst minute</th><th class="r">Highest sample</th></tr>' +
+      top.sort(function (a, b) { return a.start - b.start; }).map(function (e) {
+        return '<tr class="click" tabindex="0" data-s="' + e.start + '" data-m="' + e.minutes + '"><td>' + wmd(e.start) + ', ' + hm(e.start) + '</td><td class="r">' + fmtMin(e.minutes) +
+          '</td><td class="r">' + e.avg.toFixed(0) + '%</td><td class="r">' + e.worst.toFixed(0) + '%</td><td class="r">' + e.peak.toFixed(0) + '%</td></tr>';
+      }).join('');
+  }
+  function zoomEpisode(row) {
+    var s = +row.dataset.s, m = +row.dataset.m, pad = Math.max(30 * 60, m * 60);
+    state.from = Math.floor((s - pad) / 60) * 60; state.to = Math.ceil((s + m * 60 + pad) / 60) * 60; go();
+    $('chart').scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }
+
+  function ticket(from, to, st, eps) {
+    var lines = ['Subject: High CPU steal time on our VPS', '', 'Hello,', '',
+      'Our VPS (' + meta.host + ', ' + meta.ncpu + ' vCPUs) is getting a lot of CPU steal time, which makes our sites slow even though our own load is low. We measure steal from /proc/stat every 5 seconds.', '',
+      'Period: ' + md(from) + ' ' + hm(from) + ' to ' + md(to) + ' ' + hm(to) + ' UTC'];
+    if (st.src === 'none') { lines.push('(No data in this range.)'); return lines.join('\n'); }
+    lines.push('- Average steal: ' + st.avg.toFixed(1) + '% (about ' + (st.avg / 100 * meta.ncpu).toFixed(1) + ' of ' + meta.ncpu + ' vCPUs)' + (st.src === 'sar' ? ', from sar 10-minute averages' : ''));
+    if (st.peak != null) lines.push('- Highest 5-second sample: ' + st.peak.toFixed(1) + '%');
+    if (st.worst) lines.push('- Worst ' + (st.src === 'sar' ? '10 minutes' : 'minute') + ': ' + st.worst.worst.toFixed(0) + '% at ' + md(st.worst.t) + ' ' + hm(st.worst.t) + ' UTC');
+    if (st.src === 'own') lines.push('- Minutes averaging ' + meta.threshold + '% or more: ' + st.over);
+    lines.push('- Our own CPU use in the same period: ' + st.busy.toFixed(1) + '% on average');
+    if (eps.length) {
+      lines.push('', 'Worst episodes (UTC):');
+      eps.slice().sort(function (a, b) { return b.worst - a.worst; }).slice(0, 10).forEach(function (e) {
+        lines.push('- ' + md(e.start) + ' ' + hm(e.start) + ': ' + fmtMin(e.minutes) + ', average ' + e.avg.toFixed(0) + '%, worst minute ' + e.worst.toFixed(0) + '%');
+      });
+    }
+    lines.push('', 'Could you check the load on the host node, or move our VPS to a less busy node?', '', 'Thank you.');
+    return lines.join('\n');
+  }
+
+  // events
+  document.querySelectorAll('.seg button').forEach(function (b) { b.addEventListener('click', function () { setPreset(+b.dataset.days); }); });
+  $('prev').addEventListener('click', function () { var s = state.to - state.from; state.from -= s; state.to -= s; go(); });
+  $('next').addEventListener('click', function () { var s = state.to - state.from; state.from += s; state.to += s; go(); });
+  $('dates').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var a = Date.parse($('from').value + 'T00:00:00Z') / 1000, z = Date.parse($('to').value + 'T00:00:00Z') / 1000 + DAY;
+    if (isFinite(a) && isFinite(z) && z > a) { state.from = a; state.to = z; go(); }
+  });
+  var svg = $('chart');
+  svg.addEventListener('pointerdown', function (e) { if (!geo) return; var p = xToT(e.clientX); if (!p.inside) return; drag = { x0: p.x, t0: p.t, id: e.pointerId }; svg.setPointerCapture(e.pointerId); });
+  svg.addEventListener('pointermove', function (e) {
+    if (!geo) return;
+    if (drag) {
+      var p = xToT(e.clientX), x1 = Math.max(geo.L, Math.min(geo.L + geo.PW, p.x)), r = $('selrect');
+      r.setAttribute('x', Math.min(drag.x0, x1)); r.setAttribute('width', Math.abs(x1 - drag.x0)); hideTip(); return;
+    }
+    showTip(e.clientX);
+  });
+  svg.addEventListener('pointerup', function (e) {
+    if (!drag) return;
+    var p = xToT(e.clientX), d = drag; drag = null; $('selrect').setAttribute('width', 0);
+    if (Math.abs(p.x - d.x0) < 8) { showTip(e.clientX); return; }
+    var a = Math.min(d.t0, p.t), z = Math.max(d.t0, p.t);
+    if (z - a < 30 * 60) { var mid = (a + z) / 2; a = mid - 15 * 60; z = mid + 15 * 60; }
+    state.from = Math.floor(a / 60) * 60; state.to = Math.ceil(z / 60) * 60; go();
+  });
+  svg.addEventListener('pointerleave', function () { if (!drag) hideTip(); });
+  $('episodes').addEventListener('click', function (e) { var tr = e.target.closest('tr.click'); if (tr) zoomEpisode(tr); });
+  $('episodes').addEventListener('keydown', function (e) { var tr = e.target.closest('tr.click'); if (tr && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); zoomEpisode(tr); } });
+  $('copy').addEventListener('click', function () {
+    var ta = $('ticket'), done = function (m) { $('copied').textContent = m; };
+    var fallback = function () { ta.focus(); ta.select(); try { document.execCommand('copy'); done('Copied.'); } catch (x) { done('Selected: press Ctrl+C to copy.'); } };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(ta.value).then(function () { done('Copied. Paste it into a ticket with your web host.'); }, fallback);
+    else fallback();
+  });
+  var rt; window.addEventListener('resize', function () { clearTimeout(rt); rt = setTimeout(function () { if (meta) draw(state.from, state.to); }, 150); });
+  if (window.matchMedia) { var mq = window.matchMedia('(prefers-color-scheme: dark)'); if (mq.addEventListener) mq.addEventListener('change', function () { if (meta) draw(state.from, state.to); }); }
+
+  Promise.all([getJSON('data/meta.json'), getJSON('data/hours.json'), getJSON('data/episodes.json'), getJSON('data/sar.json').catch(function () { return { points: [] }; })])
+    .then(function (r) {
+      meta = r[0]; hours = r[1].h; episodes = r[2].e; sar = r[3].points || [];
+      $('host').textContent = meta.host;
+      document.title = meta.host + ': CPU steal';
+      var age = Math.max(0, Math.round((now() - meta.generated) / 60));
+      $('meta').textContent = meta.ncpu + ' vCPUs · data updated ' + (age < 1 ? 'just now' : age + ' min ago') + ' · refreshes every 5 minutes';
+      $('foot').innerHTML = 'cpu-steal-monitor ' + esc(meta.version) + ' · <a href="' + esc(meta.repo) + '" rel="noopener">' + esc(meta.repo.replace('https://', '')) + '</a>';
+      var m = /from=(\d+)&to=(\d+)/.exec(location.hash);
+      if (m && +m[2] > +m[1]) { state.from = +m[1]; state.to = +m[2]; go(); } else setPreset(1);
+    })
+    .catch(function (e) { $('host').textContent = 'No data yet'; $('meta').textContent = 'The dashboard data could not be loaded (' + e.message + '). It appears within 5 minutes of installing.'; });
+})();
+</script>
+</body>
+</html>
