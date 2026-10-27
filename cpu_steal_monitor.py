@@ -109,14 +109,20 @@ def save_conf(conf):
 
 def write_atomic(path, text, mode=0o644, owner=None):
     tmp = f'{path}.tmp{os.getpid()}'
-    with open(tmp, 'w') as f:
+    try:
+        os.unlink(tmp)
+    except FileNotFoundError:
+        pass
+    # O_EXCL + O_NOFOLLOW: a symlink planted at the temp name can't redirect the write
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0), mode)
+    with os.fdopen(fd, 'w') as f:
         f.write(text)
-    os.chmod(tmp, mode)
-    if owner:
-        try:
-            os.chown(tmp, *owner)
-        except OSError:
-            pass
+        os.fchmod(f.fileno(), mode)
+        if owner:
+            try:
+                os.fchown(f.fileno(), *owner)
+            except OSError:
+                pass
     os.replace(tmp, path)
 
 
@@ -900,19 +906,9 @@ def write_web(conf, changed_days):
     web = conf.get('WEB_DIR')
     if not web:
         return
-    owner = web_owner(web)
-    os.makedirs(f'{web}/data/day', exist_ok=True)
-    for d in (web, f'{web}/data', f'{web}/data/day'):
-        if owner:
-            try:
-                os.chown(d, *owner)
-            except OSError:
-                pass
     tpl = os.path.join(APP_DIR, 'dashboard.html')
     with open(tpl) as f:
-        page = f.read()
-    if not os.path.exists(f'{web}/index.html') or open(f'{web}/index.html').read() != page:
-        write_atomic(f'{web}/index.html', page, owner=owner)
+        files = {'index.html': f.read()}
     days = all_days()
     hours, episodes, daylist = [], [], []
     for d in days:
@@ -927,7 +923,7 @@ def write_web(conf, changed_days):
         rows = [[(m - start) // 60, round(v[1], 1), round(v[2], 1), round(v[3], 1)] for m, v in sorted(minutes.items())]
         body = {'day': d.isoformat(), 'start': start, 'm': rows,
                 'slow': [t - start for t in events['slow']], 'full': [t - start for t in events['full']]}
-        write_atomic(f'{web}/data/day/{d.isoformat()}.json', json.dumps(body, separators=(',', ':')), owner=owner)
+        files[f'data/day/{d.isoformat()}.json'] = json.dumps(body, separators=(',', ':'))
     tz, label = tz_extra(conf)
     meta = {
         'host': host_label(conf), 'ncpu': ncpu(), 'generated': int(time.time()), 'version': VERSION,
@@ -936,11 +932,46 @@ def write_web(conf, changed_days):
         'php': bool(conf.get('PHP_SLOWLOG') or conf.get('PHP_FPM_LOG')),
         'days': daylist, 'repo': REPO_URL,
     }
-    write_atomic(f'{web}/data/meta.json', json.dumps(meta, separators=(',', ':')), owner=owner)
-    write_atomic(f'{web}/data/hours.json', json.dumps({'h': hours}, separators=(',', ':')), owner=owner)
-    write_atomic(f'{web}/data/episodes.json', json.dumps({'e': episodes}, separators=(',', ':')), owner=owner)
-    write_atomic(f'{web}/data/sar.json', json.dumps({'points': load_sar()}, separators=(',', ':')), owner=owner)
-    keep = {d.isoformat() for d in days}
+    files['data/meta.json'] = json.dumps(meta, separators=(',', ':'))
+    files['data/hours.json'] = json.dumps({'h': hours}, separators=(',', ':'))
+    files['data/episodes.json'] = json.dumps({'e': episodes}, separators=(',', ':'))
+    files['data/sar.json'] = json.dumps({'points': load_sar()}, separators=(',', ':'))
+    as_owner(web, lambda: put_web_files(web, files, {d.isoformat() for d in days}))
+
+
+def as_owner(web, job):
+    """Run job() as the user who owns the dashboard folder. Root never writes inside a folder
+    that another user controls, so a symlink planted there can't turn into a root write."""
+    owner = web_owner(web)
+    if os.geteuid() != 0 or not owner or owner[0] == 0:
+        return job()
+    pid = os.fork()
+    if pid == 0:
+        code = 1
+        try:
+            os.setgroups([])
+            os.setgid(owner[1])
+            os.setuid(owner[0])
+            job()
+            code = 0
+        except BaseException as exc:  # report and leave the child; never fall back to root
+            print(f'dashboard write failed: {exc}', file=sys.stderr)
+        finally:
+            os._exit(code)
+    _, status = os.waitpid(pid, 0)
+    if status:
+        raise SystemExit('Could not write the dashboard files (see the error above).')
+
+
+def put_web_files(web, files, keep):
+    os.makedirs(f'{web}/data/day', exist_ok=True)
+    for rel, body in files.items():
+        path = f'{web}/{rel}'
+        if rel == 'index.html' and os.path.isfile(path):
+            with open(path) as f:
+                if f.read() == body:
+                    continue
+        write_atomic(path, body)
     for p in glob.glob(f'{web}/data/day/*.json'):
         if os.path.basename(p)[:10] not in keep:
             os.remove(p)
@@ -1210,7 +1241,11 @@ def cmd_setup(args):
             conf['WEB_URL'] = ask("That folder's address in a browser (for the email link)", conf['WEB_URL'])
     password_note = ''
     if conf['WEB_DIR']:
-        os.makedirs(conf['WEB_DIR'], exist_ok=True)
+        if not os.path.isdir(conf['WEB_DIR']):
+            os.makedirs(conf['WEB_DIR'])
+            parent = web_owner(os.path.dirname(conf['WEB_DIR']))
+            if parent and os.geteuid() == 0:
+                os.chown(conf['WEB_DIR'], *parent)
         protect = not args.no_web_password and (args.web_password or args.web_password_file
                                                 or ask_yes('Protect the dashboard with a password?', True, yes))
         if protect:
