@@ -1111,7 +1111,8 @@ def htaccess_text():
     no_cache = ('    Header unset Cache-Control\n'
                 '    Header always unset Cache-Control\n'
                 '    Header set Cache-Control "private, no-store, no-cache, must-revalidate, max-age=0"\n'
-                '    Header always set Cache-Control "private, no-store, no-cache, must-revalidate, max-age=0"\n')
+                '    Header always set Cache-Control "private, no-store, no-cache, must-revalidate, max-age=0"\n'
+                '    Header always set cf-edge-cache "no-cache"\n')
     return (f'# {MARK}: password protection for the dashboard\n'
             f'AuthType Basic\nAuthName "CPU steal monitor"\nAuthUserFile {HTPASSWD}\nRequire valid-user\n'
             '# Keeps a CMS in the parent folder (e.g. WordPress) from swallowing the login prompt\n'
@@ -1120,6 +1121,7 @@ def htaccess_text():
             '# Nothing here may be cached by a CDN or browser: a cached copy would skip the password.\n'
             '# The <FilesMatch> repeats it because a parent .htaccess (WP Rocket, for one) can append\n'
             '# "public" inside its own <FilesMatch>, which Apache applies after plain directives here.\n'
+            '# cf-edge-cache: Cloudflare APO caches HTML whatever Cache-Control says, unless the origin sends it.\n'
             '<IfModule mod_expires.c>\n  ExpiresActive Off\n</IfModule>\n'
             '<IfModule mod_headers.c>\n'
             f'{no_cache}'

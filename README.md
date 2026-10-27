@@ -110,8 +110,10 @@ location /cpu-steal/ {
 }
 ```
 
-If the site is behind a caching CDN (Cloudflare and the like), check that the folder is not cached: open it in a
-private window and make sure it still asks for the password.
+If the site is behind a caching CDN, check that the folder is not cached: open it in a private window and make sure
+it still asks for the password, and that a wrong password is refused. The `.htaccess` sends `Cache-Control: private,
+no-store` and, for Cloudflare APO (which caches WordPress sites' HTML regardless of `Cache-Control`),
+`cf-edge-cache: no-cache`. Other CDNs with a "cache everything" rule need that folder excluded in their settings.
 
 No web server? Skip the dashboard and use the email, or copy the folder to your own computer and open it with
 `python3 -m http.server` inside it.
